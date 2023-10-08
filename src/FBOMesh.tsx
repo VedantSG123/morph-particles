@@ -1,5 +1,5 @@
 import { useFrame, createPortal, PointsProps } from "@react-three/fiber"
-import { useMemo, useRef } from "react"
+import { useMemo, useRef, forwardRef, useImperativeHandle } from "react"
 import { useFBO } from "@react-three/drei"
 import * as THREE from "three"
 import surfaceSampler from "./sampler/surfaceSampler"
@@ -44,8 +44,8 @@ type properties = PointsProps & {
   pointsCount?: number
   pointsVertFunctions?: string
   pointsFragFunctions?: string
-  modelA?: number
-  modelB?: number
+  modelA?: number | null
+  modelB?: number | null
   progress?: number
   uniforms?: uniforms
   baseColor?: string
@@ -55,165 +55,203 @@ type properties = PointsProps & {
   blending?: THREE.Blending
 }
 
-function FBOMesh({
-  modelsArray,
-  pointsCount = 128,
-  pointsVertFunctions = points_vert_defaults,
-  pointsFragFunctions = points_frag_defaults,
-  modelA = 0,
-  modelB = 1,
-  progress = 0,
-  uniforms = {},
-  baseColor = "#FFF",
-  pointSize = 1.0,
-  alpha = 1.0,
-  attributes = [],
-  blending = THREE.AdditiveBlending,
-  ...meshProps
-}: properties) {
-  const dataTextureArray = useMemo(() => {
-    const arr: THREE.DataTexture[] = []
-    for (let i = 0; i < modelsArray.length; ++i) {
-      arr.push(surfaceSampler(pointsCount, modelsArray[i]))
-    }
-    return arr
-  }, [modelsArray, pointsCount])
+type FBOMeshRefTypes = {
+  getSimulationMesh: () => THREE.Mesh
+  getPointsMesh: () => THREE.Points
+  updateProgress: (progress: number) => void
+}
 
-  const meshRef = useRef<THREE.Mesh>(null)
-  const points = useRef<THREE.Points>(null)
-
-  const pointsVert = useMemo(() => {
-    return points_vert_header + pointsVertFunctions + points_vert_main
-  }, [pointsVertFunctions])
-
-  const pointsFrag = useMemo(() => {
-    return points_frag_header + pointsFragFunctions + points_frag_main
-  }, [pointsFragFunctions])
-
-  const pointsUniforms = useMemo(() => {
-    return convertToNativeUniforms(uniforms)
-  }, [uniforms])
-
-  //Sub Render ---------------------------------------------------------------
-  const scene = new THREE.Scene()
-  const camera = new THREE.OrthographicCamera(
-    -1,
-    1,
-    1,
-    -1,
-    1 / Math.pow(2, 53),
-    1
-  )
-  const positions = new Float32Array([
-    -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, -1, 0, 1, 1, 0, -1, 1, 0,
-  ])
-  const uvs = new Float32Array([0, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0])
-
-  const renderTarget = useFBO({
-    minFilter: THREE.NearestFilter,
-    magFilter: THREE.NearestFilter,
-    type: THREE.FloatType,
-  })
-
-  const particlesPosition = useMemo(() => {
-    const length = pointsCount * pointsCount
-    const particles = new Float32Array(length * 3)
-    for (let i = 0; i < length; i++) {
-      let i3 = i * 3
-      particles[i3 + 0] = (i % pointsCount) / pointsCount
-      particles[i3 + 1] = i / pointsCount / pointsCount
-    }
-
-    return particles
-  }, [pointsCount])
-  //--------------------------------------------------------------------------------
-
-  useFrame((state) => {
-    const { gl } = state
-    gl.setRenderTarget(renderTarget)
-    gl.clear()
-    gl.render(scene, camera)
-    gl.setRenderTarget(null)
-
-    if (points.current) {
-      const material = points.current.material
-      if (material instanceof THREE.ShaderMaterial) {
-        material.uniforms.uPositions.value = renderTarget.texture
-        material.uniforms.uTime.value = state.clock.elapsedTime
+const FBOMesh = forwardRef<FBOMeshRefTypes, properties>(
+  (
+    {
+      modelsArray,
+      pointsCount = 128,
+      pointsVertFunctions = points_vert_defaults,
+      pointsFragFunctions = points_frag_defaults,
+      modelA = null,
+      modelB = null,
+      progress = 0,
+      uniforms = {},
+      baseColor = "#FFF",
+      pointSize = 1.0,
+      alpha = 1.0,
+      attributes = [],
+      blending = THREE.AdditiveBlending,
+      ...meshProps
+    }: properties,
+    outerRef
+  ) => {
+    const dataTextureArray = useMemo(() => {
+      const arr: THREE.DataTexture[] = []
+      for (let i = 0; i < modelsArray.length; ++i) {
+        arr.push(surfaceSampler(pointsCount, modelsArray[i]))
       }
-    }
-  })
+      return arr
+    }, [modelsArray, pointsCount])
 
-  return (
-    <>
-      {createPortal(
-        <mesh ref={meshRef}>
+    const meshRef = useRef<THREE.Mesh>(null)
+    const points = useRef<THREE.Points>(null)
+
+    const pointsVert = useMemo(() => {
+      return points_vert_header + pointsVertFunctions + points_vert_main
+    }, [pointsVertFunctions])
+
+    const pointsFrag = useMemo(() => {
+      return points_frag_header + pointsFragFunctions + points_frag_main
+    }, [pointsFragFunctions])
+
+    const pointsUniforms = useMemo(() => {
+      return convertToNativeUniforms(uniforms)
+    }, [uniforms])
+
+    //Simulation Pass ---------------------------------------------------------------
+    const scene = new THREE.Scene()
+    const camera = new THREE.OrthographicCamera(
+      -1,
+      1,
+      1,
+      -1,
+      1 / Math.pow(2, 53),
+      1
+    )
+    const positions = new Float32Array([
+      -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, -1, 0, 1, 1, 0, -1, 1, 0,
+    ])
+    const uvs = new Float32Array([0, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0])
+
+    const renderTarget = useFBO({
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      type: THREE.FloatType,
+    })
+
+    const particlesPosition = useMemo(() => {
+      const length = pointsCount * pointsCount
+      const particles = new Float32Array(length * 3)
+      for (let i = 0; i < length; i++) {
+        let i3 = i * 3
+        particles[i3 + 0] = (i % pointsCount) / pointsCount
+        particles[i3 + 1] = i / pointsCount / pointsCount
+      }
+
+      return particles
+    }, [pointsCount])
+    //--------------------------------------------------------------------------------
+
+    useImperativeHandle(
+      outerRef,
+      () => ({
+        getSimulationMesh: () => meshRef.current!,
+        getPointsMesh: () => points.current!,
+        updateProgress: (progress: number) => {
+          if (points.current) {
+            if (points.current.material instanceof THREE.ShaderMaterial) {
+              points.current.material.uniforms.uTransitionProgress.value =
+                progress
+            }
+          }
+          if (meshRef.current) {
+            if (meshRef.current.material instanceof THREE.ShaderMaterial) {
+              meshRef.current.material.uniforms.uTransitionProgress.value =
+                progress
+            }
+          }
+        },
+      }),
+      []
+    )
+
+    useFrame((state) => {
+      const { gl } = state
+      gl.setRenderTarget(renderTarget)
+      gl.clear()
+      gl.render(scene, camera)
+      gl.setRenderTarget(null)
+
+      if (points.current) {
+        if (points.current.material instanceof THREE.ShaderMaterial) {
+          points.current.material.uniforms.uPositions.value =
+            renderTarget.texture
+          points.current.material.uniforms.uTime.value = state.clock.elapsedTime
+        }
+      }
+    })
+
+    return (
+      <>
+        {createPortal(
+          <mesh ref={meshRef}>
+            <bufferGeometry>
+              <bufferAttribute
+                attach="attributes-position"
+                count={positions.length / 3}
+                array={positions}
+                itemSize={3}
+              />
+              <bufferAttribute
+                attach="attributes-uv"
+                count={uvs.length / 2}
+                array={uvs}
+                itemSize={2}
+              />
+            </bufferGeometry>
+            <shaderMaterial
+              uniforms={{
+                uTransitionProgress: { value: 0 },
+                positionsA: {
+                  value: modelA !== null ? dataTextureArray[modelA] : null,
+                },
+                positionsB: {
+                  value: modelB !== null ? dataTextureArray[modelB] : null,
+                },
+              }}
+              vertexShader={FBOMeshvert}
+              fragmentShader={FBOMeshfrag}
+            />
+          </mesh>,
+          scene
+        )}
+        <points ref={points} {...meshProps}>
           <bufferGeometry>
             <bufferAttribute
               attach="attributes-position"
-              count={positions.length / 3}
-              array={positions}
+              count={particlesPosition.length / 3}
+              array={particlesPosition}
               itemSize={3}
             />
-            <bufferAttribute
-              attach="attributes-uv"
-              count={uvs.length / 2}
-              array={uvs}
-              itemSize={2}
-            />
+            {attributes.map((attribute, index) => {
+              return (
+                <bufferAttribute
+                  key={index}
+                  attach={`attributes-${attribute.name}`}
+                  count={attribute.array.length / attribute.itemSize}
+                  array={attribute.array}
+                  itemSize={attribute.itemSize}
+                />
+              )
+            })}
           </bufferGeometry>
           <shaderMaterial
             uniforms={{
-              uTransitionProgress: { value: progress },
-              positionsA: { value: dataTextureArray[modelA] },
-              positionsB: { value: dataTextureArray[modelB] },
+              uPositions: { value: null },
+              uColor: { value: new THREE.Color(baseColor) },
+              uTime: { value: 0 },
+              uTransitionProgress: { value: 0 },
+              uModel1: { value: modelA },
+              uModel2: { value: modelB },
+              uPointSize: { value: pointSize },
+              uAlpha1: { value: alpha },
+              ...pointsUniforms,
             }}
-            vertexShader={FBOMeshvert}
-            fragmentShader={FBOMeshfrag}
+            vertexShader={pointsVert}
+            fragmentShader={pointsFrag}
+            blending={blending}
+            depthWrite={false}
           />
-        </mesh>,
-        scene
-      )}
-      <points ref={points} {...meshProps}>
-        <bufferGeometry>
-          <bufferAttribute
-            attach="attributes-position"
-            count={particlesPosition.length / 3}
-            array={particlesPosition}
-            itemSize={3}
-          />
-          {attributes.map((attribute, index) => {
-            return (
-              <bufferAttribute
-                key={index}
-                attach={`attributes-${attribute.name}`}
-                count={attribute.array.length / attribute.itemSize}
-                array={attribute.array}
-                itemSize={attribute.itemSize}
-              />
-            )
-          })}
-        </bufferGeometry>
-        <shaderMaterial
-          uniforms={{
-            uPositions: { value: null },
-            uColor: { value: new THREE.Color(baseColor) },
-            uTime: { value: 0 },
-            uTransitionsProgress: { value: 0 },
-            uModel1: { value: modelA },
-            uModel2: { value: modelB },
-            uPointSize: { value: pointSize },
-            uAlpha1: { value: alpha },
-            ...pointsUniforms,
-          }}
-          vertexShader={pointsVert}
-          fragmentShader={pointsFrag}
-          blending={blending}
-          depthWrite={false}
-        />
-      </points>
-    </>
-  )
-}
-
+        </points>
+      </>
+    )
+  }
+)
+export type { FBOMeshRefTypes }
 export default FBOMesh
