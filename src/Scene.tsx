@@ -3,23 +3,30 @@ import { useGLTF } from "@react-three/drei"
 import { GLTF } from "three-stdlib"
 import { useControls } from "leva"
 import { bezier } from "@leva-ui/plugin-bezier"
-import { useRef, useState, useEffect } from "react"
+import { useRef, useState, useEffect, useMemo } from "react"
+import { R3FPointsFX, R3FPointsFXRefType } from "r3f-points-fx"
 import FBOMesh, { FBOMeshRefTypes } from "./FBOMesh"
+import fragFunctions from "./fragFunctions"
+import vertFunctions from "./vertFunctions"
 import * as THREE from "three"
 
 type earthGLTFResult = GLTF & {
   nodes: {
-    uploads_files_220341_Earth_Longi_Alti002: THREE.Mesh
-    uploads_files_220341_Earth_Longi_Alti002_1: THREE.Mesh
+    earth: THREE.Mesh
   }
-  materials: {
-    Default: THREE.MeshStandardMaterial
-  }
+  materials: {}
 }
 
-type rocketGLTFResult = GLTF & {
+type threejsGLTFResult = GLTF & {
   nodes: {
-    RING: THREE.Mesh
+    threejs: THREE.Mesh
+  }
+  materials: {}
+}
+
+type mobiusGLTFResult = GLTF & {
+  nodes: {
+    Cube002: THREE.Mesh
   }
   materials: {}
 }
@@ -30,11 +37,13 @@ type properties = {
 
 function Scene({ current }: properties) {
   const earth = useGLTF("earth.glb") as earthGLTFResult
-  const rocket = useGLTF("rocket-v2.glb") as rocketGLTFResult
+  const threejs = useGLTF("threejs.glb") as threejsGLTFResult
+  const mobius = useGLTF("mobius_strip.glb") as mobiusGLTFResult
 
   const meshes = [
-    earth.nodes.uploads_files_220341_Earth_Longi_Alti002_1,
-    rocket.nodes.RING,
+    earth.nodes.earth,
+    threejs.nodes.threejs,
+    mobius.nodes.Cube002,
   ]
 
   const startTime = useRef(0)
@@ -43,6 +52,24 @@ function Scene({ current }: properties) {
   const [modelA, setModelA] = useState<number | null>(null)
   const [modelB, setModelB] = useState<number | null>(null)
   const [modelAFlag, setModelAFlag] = useState(false)
+
+  const generateRandomnArray = (size: number) => {
+    const length = size * size * 3
+    const data = new Float32Array(length)
+
+    for (let i = 0; i < length; i++) {
+      const stride = i * 3
+
+      data[stride] = Math.random() * 3 - 1
+      data[stride + 1] = Math.random() * 3 - 1
+      data[stride + 2] = Math.random() * 3 - 1
+    }
+    return data
+  }
+
+  const randomArray = useMemo(() => {
+    return generateRandomnArray(128)
+  }, [])
 
   const { duration, curve } = useControls({
     duration: {
@@ -78,17 +105,32 @@ function Scene({ current }: properties) {
     }
 
     FBORef.current?.updateProgress(progress.current)
+    FBORef.current?.updateTime(state.clock.getElapsedTime())
   })
 
   return (
     <>
       <FBOMesh
         modelsArray={meshes}
-        pointSize={3.0}
         baseColor="#ff0000"
         modelA={modelA}
         modelB={modelB}
         ref={FBORef}
+        alpha={1}
+        uniforms={{
+          uColor1: new THREE.Color("#D0BFFF"),
+          uColor2: new THREE.Color("#FF4B91"),
+          uColor3: new THREE.Color("#FFCD4B"),
+        }}
+        attributes={[
+          {
+            name: "aRandom",
+            array: randomArray,
+            itemSize: 3,
+          },
+        ]}
+        pointsVertFunctions={vertFunctions}
+        pointsFragFunctions={fragFunctions}
       />
     </>
   )

@@ -15,6 +15,7 @@
     "@react-three/fiber": "^8.14.4",
     "@types/three": "^0.156.0",
     "leva": "^0.9.35",
+    "r3f-points-fx": "^1.0.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "three": "^0.157.0"
